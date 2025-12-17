@@ -87,6 +87,8 @@ app.post("/slack/ask", async (req, res) => {
   if (!verifySlackRequest(req)) return res.status(401).send("Invalid signature");
 
   const question = (req.body.text || "").trim();
+  const responseUrl = req.body.response_url;
+
   if (!question) {
     return res.json({
       response_type: "ephemeral",
@@ -94,36 +96,42 @@ app.post("/slack/ask", async (req, res) => {
     });
   }
 
-  // Load knowledge (don’t crash if missing)
-  let knowledgeText = "";
+  // 1) ACK immediately so Slack doesn't time out
+  res.json({
+    response_type: "ephemeral",
+    text: "Got it — thinking…",
+  });
+
+  // 2) Do the slow work AFTER responding
   try {
-    knowledgeText = fs.readFileSync(
-      new URL("./knowledge.md", import.meta.url),
-      "utf8"
-    );
-  } catch (e) {
-    console.warn("knowledge.md not found or unreadable; continuing without it.");
-  }
+    let knowledgeText = "";
+    try {
+      knowledgeText = fs.readFileSync(
+        new URL("./knowledge.md", import.meta.url),
+        "utf8"
+      );
+    } catch {
+      // ok if missing
+    }
 
-  const relevant = knowledgeText
-    ? findRelevantKnowledge(question, knowledgeText)
-    : "";
+    const relevant = knowledgeText
+      ? findRelevantKnowledge(question, knowledgeText)
+      : "";
 
-  const messages = [{ role: "system", content: SYSTEM_PROMPT }];
+    const messages = [{ role: "system", content: SYSTEM_PROMPT }];
 
-  if (relevant) {
-    messages.push({
-      role: "system",
-      content:
-        "Use the following internal knowledge as the primary source. " +
-        "If it doesn't contain the answer, say you don't know and suggest asking a manager.\n\n" +
-        relevant,
-    });
-  }
+    if (relevant) {
+      messages.push({
+        role: "system",
+        content:
+          "Use the following internal knowledge as the primary source. " +
+          "If it doesn't contain the answer, say you don't know and suggest asking a manager.\n\n" +
+          relevant,
+      });
+    }
 
-  messages.push({ role: "user", content: question });
+    messages.push({ role: "user", content: question });
 
-  try {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages,
@@ -134,21 +142,39 @@ app.post("/slack/ask", async (req, res) => {
       completion.choices?.[0]?.message?.content?.trim() ||
       "I couldn’t generate an answer.";
 
-    return res.json({
-      response_type: "ephemeral",
-      text: answer,
-    });
+    // 3) Send final answer back via response_url
+    if (responseUrl) {
+      await fetch(responseUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          response_type: "ephemeral",
+          replace_original: true,
+          text: answer,
+        }),
+      });
+    }
   } catch (err) {
-    console.error("OpenAI error:", err?.message || err);
-    return res.json({
-      response_type: "ephemeral",
-      text: "I hit an error talking to the AI. Try again in a minute.",
-    });
+    console.error("Async handler error:", err?.message || err);
+
+    if (responseUrl) {
+      await fetch(responseUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          response_type: "ephemeral",
+          replace_original: true,
+          text: "I hit an error talking to the AI. Try again in a minute.",
+        }),
+      });
+    }
   }
 });
+
 
 app.get("/", (req, res) => res.send("Slack Ask Bot is running."));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
 
 
