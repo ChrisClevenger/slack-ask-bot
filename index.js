@@ -7,19 +7,27 @@ import OpenAI from "openai";
 
 const LOCATION = "brew"; // Brew & Brew
 
-function findRelevantKnowledge(question, knowledgeText, filename = "") {
+function bestMatchFromDoc(question, knowledgeText, filename = "") {
   const normalized = (knowledgeText || "").replace(/\r\n/g, "\n");
+
+  // If there are no "## " headings, this becomes one big section (still fine)
   const sections = normalized
     .split(/\n## /)
     .map((s, i) => (i === 0 ? s : "## " + s));
 
-  const q = question.toLowerCase();
-  const qWords = q
+  const qWords = question
+    .toLowerCase()
     .split(/\s+/)
-    .map(w => w.replace(/[^a-z0-9]/g, ""))
-    .filter(w => w.length >= 3);
+    .map((w) => w.replace(/[^a-z0-9]/g, ""))
+    .filter((w) => w.length >= 3);
 
-  let best = { score: 0, text: "" };
+  if (qWords.length === 0) return { score: 0, text: "" };
+
+  // Strong filename fallback: if filename contains key words, guarantee a match
+  const fileHay = filename.toLowerCase();
+  const filenameHits = qWords.filter((w) => fileHay.includes(w)).length;
+
+  let best = { score: filenameHits * 3, text: "" }; // weight filename hits
 
   for (const sec of sections) {
     const haystack = (filename + "\n" + sec).toLowerCase();
@@ -29,12 +37,18 @@ function findRelevantKnowledge(question, knowledgeText, filename = "") {
       if (haystack.includes(w)) score += 1;
     }
 
+    // filename-weighted score
+    score += filenameHits * 3;
+
     if (score > best.score) best = { score, text: sec };
   }
 
-  // return only if there was at least one hit
-  return best.score > 0 ? best.text : "";
+  // If filename hits exist but no section won, return the whole doc
+  if (!best.text && filenameHits > 0) best.text = normalized;
+
+  return best.score > 0 ? best : { score: 0, text: "" };
 }
+
 
 function loadLocationKnowledge(location) {
   const basePath = new URL(`./knowledge/${location}/`, import.meta.url);
@@ -139,15 +153,21 @@ app.post("/slack/ask", (req, res) => {
       console.log("Loaded knowledge files:", knowledgeDocs.map(d => d.file));
 
 const matches = [];
+
 for (const doc of knowledgeDocs) {
-  const relevant = findRelevantKnowledge(question, doc.text, doc.file);
-  if (relevant) matches.push(relevant);
+  const match = bestMatchFromDoc(question, doc.text, doc.file);
+  console.log("Doc score:", doc.file, match.score);
+
+  if (match.text) matches.push({ file: doc.file, score: match.score, text: match.text });
 }
 
-console.log("Match count:", matches.length);
+// Sort best-first and take top 2
+matches.sort((a, b) => b.score - a.score);
 
-// Limit context to top 2 matches max
-const context = matches.slice(0, 2).join("\n\n");
+console.log("Top matches:", matches.slice(0, 2).map(m => `${m.file}(${m.score})`));
+
+const context = matches.slice(0, 2).map(m => `Source: ${m.file}\n${m.text}`).join("\n\n");
+
 
 
       const messages = [{ role: "system", content: SYSTEM_PROMPT }];
@@ -213,4 +233,5 @@ const context = matches.slice(0, 2).join("\n\n");
 app.get("/", (req, res) => res.send("Slack Ask Bot is running."));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
 
