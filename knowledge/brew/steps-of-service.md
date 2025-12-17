@@ -1,3 +1,5 @@
+Brew & Brew Steps of Service
+
 1. Greet every person when they walk through the door. 
 2. Guide folks through the ordering process. 
 3. Have a sense of urgency when serving folks.
@@ -8,4 +10,5 @@
 8. Be a good neighbor. 
 9. Tidy up as you go and keep your station clean. 
 10. Be warm and friendly. 
+
 11. Stay off your phone. 
