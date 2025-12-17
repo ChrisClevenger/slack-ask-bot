@@ -1,8 +1,32 @@
+import fs from "fs";
 import express from "express";
 import bodyParser from "body-parser";
 import dotenv from "dotenv";
 import crypto from "crypto";
 import OpenAI from "openai";
+
+function findRelevantKnowledge(question, knowledgeText) {
+  const sections = knowledgeText
+    .split(/\n## /)
+    .map((s, i) => (i === 0 ? s : "## " + s));
+
+  const q = question.toLowerCase();
+  let best = { score: 0, text: "" };
+
+  for (const sec of sections) {
+    const lowered = sec.toLowerCase();
+    let score = 0;
+
+    for (const word of q.split(/\s+/)) {
+      const w = word.replace(/[^a-z0-9]/g, "");
+      if (w.length >= 4 && lowered.includes(w)) score += 1;
+    }
+
+    if (score > best.score) best = { score, text: sec };
+  }
+
+  return best.score > 0 ? best.text : "";
+}
 
 dotenv.config();
 
@@ -35,7 +59,10 @@ function verifySlackRequest(req) {
   const baseString = `v0:${timestamp}:${req.rawBody}`;
   const mySignature =
     "v0=" +
-    crypto.createHmac("sha256", signingSecret).update(baseString, "utf8").digest("hex");
+    crypto
+      .createHmac("sha256", signingSecret)
+      .update(baseString, "utf8")
+      .digest("hex");
 
   const a = Buffer.from(mySignature, "utf8");
   const b = Buffer.from(slackSignature, "utf8");
@@ -67,17 +94,45 @@ app.post("/slack/ask", async (req, res) => {
     });
   }
 
+  // Load knowledge (don’t crash if missing)
+  let knowledgeText = "";
+  try {
+    knowledgeText = fs.readFileSync(
+      new URL("./knowledge.md", import.meta.url),
+      "utf8"
+    );
+  } catch (e) {
+    console.warn("knowledge.md not found or unreadable; continuing without it.");
+  }
+
+  const relevant = knowledgeText
+    ? findRelevantKnowledge(question, knowledgeText)
+    : "";
+
+  const messages = [{ role: "system", content: SYSTEM_PROMPT }];
+
+  if (relevant) {
+    messages.push({
+      role: "system",
+      content:
+        "Use the following internal knowledge as the primary source. " +
+        "If it doesn't contain the answer, say you don't know and suggest asking a manager.\n\n" +
+        relevant,
+    });
+  }
+
+  messages.push({ role: "user", content: question });
+
   try {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: question },
-      ],
-      temperature: 0.2
+      messages,
+      temperature: 0.2,
     });
 
-    const answer = completion.choices?.[0]?.message?.content?.trim() || "I couldn’t generate an answer.";
+    const answer =
+      completion.choices?.[0]?.message?.content?.trim() ||
+      "I couldn’t generate an answer.";
 
     return res.json({
       response_type: "ephemeral",
@@ -95,3 +150,5 @@ app.post("/slack/ask", async (req, res) => {
 app.get("/", (req, res) => res.send("Slack Ask Bot is running."));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+
