@@ -163,6 +163,21 @@ for (const doc of knowledgeDocs) {
 
 // Sort best-first and take top 2
 matches.sort((a, b) => b.score - a.score);
+      if (matches.length === 0 && process.env.UNANSWERED_WEBHOOK_URL) {
+  await fetch(process.env.UNANSWERED_WEBHOOK_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      secret: process.env.UNANSWERED_WEBHOOK_SECRET,
+      location: LOCATION,
+      user_id: req.body.user_id,
+      channel_id: req.body.channel_id,
+      question,
+      top_matches: "",
+    }),
+  });
+}
+
 
 console.log("Top matches:", matches.slice(0, 2).map(m => `${m.file}(${m.score})`));
 
@@ -233,5 +248,6 @@ const context = matches.slice(0, 2).map(m => `Source: ${m.file}\n${m.text}`).joi
 app.get("/", (req, res) => res.send("Slack Ask Bot is running."));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
 
 
