@@ -7,26 +7,32 @@ import OpenAI from "openai";
 
 const LOCATION = "brew"; // Brew & Brew
 
-function findRelevantKnowledge(question, knowledgeText) {
-  const sections = knowledgeText
+function findRelevantKnowledge(question, knowledgeText, filename = "") {
+  const normalized = (knowledgeText || "").replace(/\r\n/g, "\n");
+  const sections = normalized
     .split(/\n## /)
     .map((s, i) => (i === 0 ? s : "## " + s));
 
   const q = question.toLowerCase();
+  const qWords = q
+    .split(/\s+/)
+    .map(w => w.replace(/[^a-z0-9]/g, ""))
+    .filter(w => w.length >= 3);
+
   let best = { score: 0, text: "" };
 
   for (const sec of sections) {
-    const lowered = sec.toLowerCase();
+    const haystack = (filename + "\n" + sec).toLowerCase();
     let score = 0;
 
-    for (const word of q.split(/\s+/)) {
-      const w = word.replace(/[^a-z0-9]/g, "");
-      if (w.length >= 4 && lowered.includes(w)) score += 1;
+    for (const w of qWords) {
+      if (haystack.includes(w)) score += 1;
     }
 
     if (score > best.score) best = { score, text: sec };
   }
 
+  // return only if there was at least one hit
   return best.score > 0 ? best.text : "";
 }
 
@@ -129,15 +135,20 @@ app.post("/slack/ask", (req, res) => {
   (async () => {
     try {
       const knowledgeDocs = loadLocationKnowledge(LOCATION);
+      console.log("Knowledge doc count:", knowledgeDocs.length);
+      console.log("Loaded knowledge files:", knowledgeDocs.map(d => d.file));
 
-      const matches = [];
-      for (const doc of knowledgeDocs) {
-        const relevant = findRelevantKnowledge(question, doc.text);
-        if (relevant) matches.push(relevant);
-      }
+const matches = [];
+for (const doc of knowledgeDocs) {
+  const relevant = findRelevantKnowledge(question, doc.text, doc.file);
+  if (relevant) matches.push(relevant);
+}
 
-      // Limit context to top 2 matches max
-      const context = matches.slice(0, 2).join("\n\n");
+console.log("Match count:", matches.length);
+
+// Limit context to top 2 matches max
+const context = matches.slice(0, 2).join("\n\n");
+
 
       const messages = [{ role: "system", content: SYSTEM_PROMPT }];
 
@@ -202,3 +213,4 @@ app.post("/slack/ask", (req, res) => {
 app.get("/", (req, res) => res.send("Slack Ask Bot is running."));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
