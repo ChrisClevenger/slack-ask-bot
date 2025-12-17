@@ -129,27 +129,38 @@ Rules:
 `.trim();
 
 app.post("/slack/ask", (req, res) => {
-  if (!verifySlackRequest(req)) return res.status(401).send("Invalid signature");
+  // 1) Fast security check
+  if (!verifySlackRequest(req)) {
+    res.status(401).send("Invalid signature");
+    return;
+  }
 
   const question = (req.body.text || "").trim();
   const responseUrl = req.body.response_url;
 
   if (!question) {
-    return res.json({
+    res.json({
       response_type: "ephemeral",
       text: "Try: `/ask How do I close the bar?`",
     });
+    return;
   }
 
-  // 1) ACK immediately so Slack doesn't time out
-  res.json({ response_type: "ephemeral", text: "Got it — thinking…" });
+  // 2) ACK IMMEDIATELY (Slack timeout protection)
+  res.json({
+    response_type: "ephemeral",
+    text: "Got it — thinking…",
+  });
 
-  // 2) Do the slow work AFTER responding (detached)
-  (async () => {
+  // 3) DETACH ALL SLOW WORK
+  setImmediate(async () => {
     try {
       const knowledgeDocs = loadLocationKnowledge(LOCATION);
       console.log("Knowledge doc count:", knowledgeDocs.length);
-      console.log("Loaded knowledge files:", knowledgeDocs.map((d) => d.file));
+      console.log(
+        "Loaded knowledge files:",
+        knowledgeDocs.map((d) => d.file)
+      );
 
       const matches = [];
 
@@ -158,24 +169,25 @@ app.post("/slack/ask", (req, res) => {
         console.log("Doc score:", doc.file, match.score);
 
         if (match.text) {
-          matches.push({ file: doc.file, score: match.score, text: match.text });
+          matches.push({
+            file: doc.file,
+            score: match.score,
+            text: match.text,
+          });
         }
       }
 
-      // Sort best-first and take top 2
+      // Sort by best match
       matches.sort((a, b) => b.score - a.score);
 
-      // --- Hook #1 (debug): confirm whether the logging branch should run
-      const BEST_SCORE_THRESHOLD = 4; // tune later
-      const shouldLogUnanswered =
-        matches.length === 0 || (matches[0] && matches[0].score < BEST_SCORE_THRESHOLD);
+      console.log(
+        "Top matches:",
+        matches.slice(0, 2).map((m) => `${m.file}(${m.score})`)
+      );
 
-      console.log("shouldLogUnanswered:", shouldLogUnanswered);
-      console.log("hasWebhookUrl:", !!process.env.UNANSWERED_WEBHOOK_URL);
-
-      // --- Hook #2 (debug): log webhook response status/body
-      if (shouldLogUnanswered && process.env.UNANSWERED_WEBHOOK_URL) {
-        const resp = await fetch(process.env.UNANSWERED_WEBHOOK_URL, {
+      // Log unanswered questions
+      if (matches.length === 0 && process.env.UNANSWERED_WEBHOOK_URL) {
+        const r = await fetch(process.env.UNANSWERED_WEBHOOK_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -184,16 +196,12 @@ app.post("/slack/ask", (req, res) => {
             user_id: req.body.user_id,
             channel_id: req.body.channel_id,
             question,
-            top_matches: matches.slice(0, 2).map((m) => `${m.file}(${m.score})`).join(", "),
+            top_matches: "",
           }),
         });
 
-        const bodyText = await resp.text();
-        console.log("Webhook status:", resp.status);
-        console.log("Webhook body:", bodyText);
+        console.log("Webhook status:", r.status);
       }
-
-      console.log("Top matches:", matches.slice(0, 2).map((m) => `${m.file}(${m.score})`));
 
       const context = matches
         .slice(0, 2)
@@ -224,7 +232,7 @@ app.post("/slack/ask", (req, res) => {
         completion.choices?.[0]?.message?.content?.trim() ||
         "I couldn’t generate an answer.";
 
-      // 3) Send final answer back via response_url
+      // 4) Send final message back to Slack
       if (responseUrl) {
         const r = await fetch(responseUrl, {
           method: "POST",
@@ -241,7 +249,7 @@ app.post("/slack/ask", (req, res) => {
         }
       }
     } catch (err) {
-      console.error("Async handler error:", err?.message || err);
+      console.error("Async handler error:", err);
 
       if (responseUrl) {
         await fetch(responseUrl, {
@@ -255,11 +263,13 @@ app.post("/slack/ask", (req, res) => {
         });
       }
     }
-  })();
+  });
 
+  // 5) END REQUEST HANDLER (critical)
   return;
 });
 
 app.get("/", (req, res) => res.send("Slack Ask Bot is running."));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
