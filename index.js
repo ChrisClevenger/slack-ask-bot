@@ -5,6 +5,8 @@ import dotenv from "dotenv";
 import crypto from "crypto";
 import OpenAI from "openai";
 
+const LOCATION = "brew"; // Brew & Brew
+
 function findRelevantKnowledge(question, knowledgeText) {
   const sections = knowledgeText
     .split(/\n## /)
@@ -26,6 +28,30 @@ function findRelevantKnowledge(question, knowledgeText) {
   }
 
   return best.score > 0 ? best.text : "";
+}
+
+function loadLocationKnowledge(location) {
+  const basePath = new URL(`./knowledge/${location}/`, import.meta.url);
+  const docs = [];
+
+  try {
+    const files = fs.readdirSync(basePath);
+
+    for (const file of files) {
+      if (!file.endsWith(".md")) continue;
+
+      const text = fs.readFileSync(
+        new URL(`./knowledge/${location}/${file}`, import.meta.url),
+        "utf8"
+      );
+
+      docs.push({ file, text });
+    }
+  } catch (err) {
+    console.warn(`Could not load knowledge for location: ${location}`, err);
+  }
+
+  return docs;
 }
 
 dotenv.config();
@@ -83,7 +109,7 @@ Rules:
 - For anything involving safety, alcohol service, cash handling, or HR: be extra careful and conservative.
 `.trim();
 
-app.post("/slack/ask", async (req, res) => {
+app.post("/slack/ask", (req, res) => {
   if (!verifySlackRequest(req)) return res.status(401).send("Invalid signature");
 
   const question = (req.body.text || "").trim();
@@ -97,84 +123,82 @@ app.post("/slack/ask", async (req, res) => {
   }
 
   // 1) ACK immediately so Slack doesn't time out
-  res.json({
-    response_type: "ephemeral",
-    text: "Got it — thinking…",
-  });
+  res.json({ response_type: "ephemeral", text: "Got it — thinking…" });
 
-  // 2) Do the slow work AFTER responding
-  try {
-    let knowledgeText = "";
+  // 2) Do the slow work AFTER responding (detached)
+  (async () => {
     try {
-      knowledgeText = fs.readFileSync(
-        new URL("./knowledge.md", import.meta.url),
-        "utf8"
-      );
-    } catch {
-      // ok if missing
-    }
+      const knowledgeDocs = loadLocationKnowledge(LOCATION);
 
-    const relevant = knowledgeText
-      ? findRelevantKnowledge(question, knowledgeText)
-      : "";
+      const matches = [];
+      for (const doc of knowledgeDocs) {
+        const relevant = findRelevantKnowledge(question, doc.text);
+        if (relevant) matches.push(relevant);
+      }
 
-    const messages = [{ role: "system", content: SYSTEM_PROMPT }];
+      // Limit context to top 2 matches max
+      const context = matches.slice(0, 2).join("\n\n");
 
-    if (relevant) {
-      messages.push({
-        role: "system",
-        content:
-          "Use the following internal knowledge as the primary source. " +
-          "If it doesn't contain the answer, say you don't know and suggest asking a manager.\n\n" +
-          relevant,
+      const messages = [{ role: "system", content: SYSTEM_PROMPT }];
+
+      if (context) {
+        messages.push({
+          role: "system",
+          content:
+            "Use the following internal knowledge as the primary source. " +
+            "If it doesn't contain the answer, say you don't know and suggest asking a manager.\n\n" +
+            context,
+        });
+      }
+
+      messages.push({ role: "user", content: question });
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages,
+        temperature: 0.2,
       });
+
+      const answer =
+        completion.choices?.[0]?.message?.content?.trim() ||
+        "I couldn’t generate an answer.";
+
+      // 3) Send final answer back via response_url
+      if (responseUrl) {
+        const r = await fetch(responseUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            response_type: "ephemeral",
+            replace_original: true,
+            text: answer,
+          }),
+        });
+
+        if (!r.ok) {
+          console.error("Slack response_url failed:", r.status, await r.text());
+        }
+      }
+    } catch (err) {
+      console.error("Async handler error:", err?.message || err);
+
+      if (responseUrl) {
+        await fetch(responseUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            response_type: "ephemeral",
+            replace_original: true,
+            text: "I hit an error talking to the AI. Try again in a minute.",
+          }),
+        });
+      }
     }
+  })();
 
-    messages.push({ role: "user", content: question });
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages,
-      temperature: 0.2,
-    });
-
-    const answer =
-      completion.choices?.[0]?.message?.content?.trim() ||
-      "I couldn’t generate an answer.";
-
-    // 3) Send final answer back via response_url
-    if (responseUrl) {
-      await fetch(responseUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          response_type: "ephemeral",
-          replace_original: true,
-          text: answer,
-        }),
-      });
-    }
-  } catch (err) {
-    console.error("Async handler error:", err?.message || err);
-
-    if (responseUrl) {
-      await fetch(responseUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          response_type: "ephemeral",
-          replace_original: true,
-          text: "I hit an error talking to the AI. Try again in a minute.",
-        }),
-      });
-    }
-  }
+  return;
 });
-
 
 app.get("/", (req, res) => res.send("Slack Ask Bot is running."));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
-
-
