@@ -9,7 +9,7 @@
 6. You will be prompted to login.
 
           User name: employees
-          Password: BrewCrew
+          Password: BrewCrew44
 
 7. After login, click the eParc Val tab.
 
@@ -27,3 +27,4 @@
 11. Leave the garage via the exit on the far right. You insert your validated ticket to the box with glowing blue light, and the gate should open for you. 
 
 Note that if you go a single minute over the amount of time validated on the ticket, they charge you the $5 for that next hour, just to get out of the garage.
+
