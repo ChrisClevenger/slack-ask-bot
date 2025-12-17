@@ -1,3 +1,5 @@
+Brew and Brew Core Values
+
 1. Build connections. 
 2. Be a good neighbor. 
 3. Make it (look) easy. 
