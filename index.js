@@ -2,13 +2,15 @@ import express from "express";
 import bodyParser from "body-parser";
 import dotenv from "dotenv";
 import crypto from "crypto";
+import OpenAI from "openai";
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Capture raw body for Slack signature verification
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
 app.use(
   bodyParser.urlencoded({
     extended: true,
@@ -24,10 +26,8 @@ function verifySlackRequest(req) {
 
   const timestamp = req.headers["x-slack-request-timestamp"];
   const slackSignature = req.headers["x-slack-signature"];
-
   if (!timestamp || !slackSignature || !req.rawBody) return false;
 
-  // Prevent replay attacks: reject if older than 5 minutes
   const fiveMinutes = 60 * 5;
   const now = Math.floor(Date.now() / 1000);
   if (Math.abs(now - Number(timestamp)) > fiveMinutes) return false;
@@ -37,7 +37,6 @@ function verifySlackRequest(req) {
     "v0=" +
     crypto.createHmac("sha256", signingSecret).update(baseString, "utf8").digest("hex");
 
-  // Timing-safe compare
   const a = Buffer.from(mySignature, "utf8");
   const b = Buffer.from(slackSignature, "utf8");
   if (a.length !== b.length) return false;
@@ -45,25 +44,54 @@ function verifySlackRequest(req) {
   return crypto.timingSafeEqual(a, b);
 }
 
-app.post("/slack/ask", (req, res) => {
-  if (!verifySlackRequest(req)) {
-    return res.status(401).send("Invalid signature");
+const SYSTEM_PROMPT = `
+You are an internal operations assistant for a group of coffee shops and bars.
+Give clear, practical, plain-language answers for staff who are mid-shift.
+
+Rules:
+- Keep it short (aim for 5-10 lines).
+- Use bullets or steps when helpful.
+- If you’re not sure, say so and recommend asking a manager.
+- Never invent store policy.
+- For anything involving safety, alcohol service, cash handling, or HR: be extra careful and conservative.
+`.trim();
+
+app.post("/slack/ask", async (req, res) => {
+  if (!verifySlackRequest(req)) return res.status(401).send("Invalid signature");
+
+  const question = (req.body.text || "").trim();
+  if (!question) {
+    return res.json({
+      response_type: "ephemeral",
+      text: "Try: `/ask How do I close the bar?`",
+    });
   }
 
-  const question = req.body.text || "";
-  console.log("Verified Slack request. Question:", question);
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: question },
+      ],
+      temperature: 0.2
+    });
 
-  // Still hard-coded response for now
-  res.json({
-    response_type: "ephemeral",
-    text: `Got it 👍 You asked: "${question}"`,
-  });
+    const answer = completion.choices?.[0]?.message?.content?.trim() || "I couldn’t generate an answer.";
+
+    return res.json({
+      response_type: "ephemeral",
+      text: answer,
+    });
+  } catch (err) {
+    console.error("OpenAI error:", err?.message || err);
+    return res.json({
+      response_type: "ephemeral",
+      text: "I hit an error talking to the AI. Try again in a minute.",
+    });
+  }
 });
 
-app.get("/", (req, res) => {
-  res.send("Slack Ask Bot is running.");
-});
+app.get("/", (req, res) => res.send("Slack Ask Bot is running."));
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
