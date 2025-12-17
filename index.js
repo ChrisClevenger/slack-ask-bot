@@ -49,7 +49,6 @@ function bestMatchFromDoc(question, knowledgeText, filename = "") {
   return best.score > 0 ? best : { score: 0, text: "" };
 }
 
-
 function loadLocationKnowledge(location) {
   const basePath = new URL(`./knowledge/${location}/`, import.meta.url);
   const docs = [];
@@ -150,40 +149,56 @@ app.post("/slack/ask", (req, res) => {
     try {
       const knowledgeDocs = loadLocationKnowledge(LOCATION);
       console.log("Knowledge doc count:", knowledgeDocs.length);
-      console.log("Loaded knowledge files:", knowledgeDocs.map(d => d.file));
+      console.log("Loaded knowledge files:", knowledgeDocs.map((d) => d.file));
 
-const matches = [];
+      const matches = [];
 
-for (const doc of knowledgeDocs) {
-  const match = bestMatchFromDoc(question, doc.text, doc.file);
-  console.log("Doc score:", doc.file, match.score);
+      for (const doc of knowledgeDocs) {
+        const match = bestMatchFromDoc(question, doc.text, doc.file);
+        console.log("Doc score:", doc.file, match.score);
 
-  if (match.text) matches.push({ file: doc.file, score: match.score, text: match.text });
-}
+        if (match.text) {
+          matches.push({ file: doc.file, score: match.score, text: match.text });
+        }
+      }
 
-// Sort best-first and take top 2
-matches.sort((a, b) => b.score - a.score);
-      if (matches.length === 0 && process.env.UNANSWERED_WEBHOOK_URL) {
-  await fetch(process.env.UNANSWERED_WEBHOOK_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      secret: process.env.UNANSWERED_WEBHOOK_SECRET,
-      location: LOCATION,
-      user_id: req.body.user_id,
-      channel_id: req.body.channel_id,
-      question,
-      top_matches: "",
-    }),
-  });
-}
+      // Sort best-first and take top 2
+      matches.sort((a, b) => b.score - a.score);
 
+      // --- Hook #1 (debug): confirm whether the logging branch should run
+      const BEST_SCORE_THRESHOLD = 4; // tune later
+      const shouldLogUnanswered =
+        matches.length === 0 || (matches[0] && matches[0].score < BEST_SCORE_THRESHOLD);
 
-console.log("Top matches:", matches.slice(0, 2).map(m => `${m.file}(${m.score})`));
+      console.log("shouldLogUnanswered:", shouldLogUnanswered);
+      console.log("hasWebhookUrl:", !!process.env.UNANSWERED_WEBHOOK_URL);
 
-const context = matches.slice(0, 2).map(m => `Source: ${m.file}\n${m.text}`).join("\n\n");
+      // --- Hook #2 (debug): log webhook response status/body
+      if (shouldLogUnanswered && process.env.UNANSWERED_WEBHOOK_URL) {
+        const resp = await fetch(process.env.UNANSWERED_WEBHOOK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            secret: process.env.UNANSWERED_WEBHOOK_SECRET,
+            location: LOCATION,
+            user_id: req.body.user_id,
+            channel_id: req.body.channel_id,
+            question,
+            top_matches: matches.slice(0, 2).map((m) => `${m.file}(${m.score})`).join(", "),
+          }),
+        });
 
+        const bodyText = await resp.text();
+        console.log("Webhook status:", resp.status);
+        console.log("Webhook body:", bodyText);
+      }
 
+      console.log("Top matches:", matches.slice(0, 2).map((m) => `${m.file}(${m.score})`));
+
+      const context = matches
+        .slice(0, 2)
+        .map((m) => `Source: ${m.file}\n${m.text}`)
+        .join("\n\n");
 
       const messages = [{ role: "system", content: SYSTEM_PROMPT }];
 
@@ -248,6 +263,3 @@ const context = matches.slice(0, 2).map(m => `Source: ${m.file}\n${m.text}`).joi
 app.get("/", (req, res) => res.send("Slack Ask Bot is running."));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
-
-
