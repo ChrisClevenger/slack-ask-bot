@@ -2,7 +2,7 @@
 
 category: coffee
 audience: staff
-topics: coffee recipes, syrups, sauces, drinks 
+topics: coffee recipes, syrups, sauces, drinks, how do I make, what's the recipe for, what's in
 
 ## Espresso Coffee Syrup Recipes 
 
