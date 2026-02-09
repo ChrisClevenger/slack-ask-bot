@@ -20,13 +20,14 @@ Clean and stock bathroom.
 Bring in and stack stools.
 Sweep everywhere.
 Pour BIO-CLEAN down every drain. 
-SUN/THUR - Mop everywhere.
-M/T/W/S - Mop Bar and Bathroom.
+WED/SAT - Mop everywhere.
+TUE/THUR/FRI - Mop Bar and Bathroom.
 M/W/F - Water all the plants. Hanging plants get half a goose neck. Lower planters get a whole gooseneck each. 
 SUN - Sweep and mop walkin. 
 TUES - Dust window sills. 
 WED - Dust items/selves on retail display. 
 THUR - Clean and sanitize trashcans. 
+THUR - SWeep and Mop the Walkin
 Turn off and drain the dishwasher.
 Pull any cold brew.
 Put dirty laundry in the bin outside.
